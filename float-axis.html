@@ -1,0 +1,103 @@
+<!doctype html><html lang="pl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oś IEEE 754</title>
+<style>
+*{box-sizing:border-box}body{margin:0;color:#172641;font:15px system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:24px 16px}.controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px}label{display:grid;gap:4px;font-size:13px}input,select{font:inherit;padding:6px;border:1px solid #aebaca;border-radius:5px;background:white;color:inherit}input{width:5em}#plot{width:100%;height:320px;display:block;touch-action:none;cursor:crosshair}#error{color:#b91c1c}#tip{display:none;position:fixed;pointer-events:none;background:#172641;color:white;padding:8px 12px;border-radius:6px}
+</style><main><div class="controls"><label>Bity wykładnika E<input id="eb" type="number" min="2" max="8" value="4"></label><label>Bity ułamka M<input id="mb" type="number" min="1" max="16" value="3"></label><label>Skala<select id="scale"><option value="linear">Liniowa</option><option value="symlog">Symetryczna logarytmiczna</option></select></label><label>Wyróżnij wykładnik<select id="highlight"></select></label><label>Powiększenie<select id="magnification"><option value="" disabled>Inne powiększenie</option></select></label></div><div id="error" role="alert"></div><canvas id="plot" aria-label="Oś liczb IEEE 754"></canvas><div id="tip"></div></main>
+<script>
+'use strict';
+// Pełna enumeracja skończonych wzorców; obliczenia są dokładne w Number
+// dla ograniczeń E <= 8, M <= 16 przyjętych w tym demonstratorze.
+function generateFloats(E,M){
+ const bias=2**(E-1)-1,F=2**M,limit=2**E-1,positive=[];
+ for(let e=0;e<limit;e++)for(let f=0;f<F;f++){
+  const v=e===0?(f/F)*2**(1-bias):(1+f/F)*2**(e-bias);
+  positive.push({s:0,e,f,v,sub:e===0&&f!==0});
+ }
+ return positive.slice().reverse().map(p=>({...p,s:1,v:-p.v})).concat(positive);
+}
+const $=id=>document.getElementById(id),canvas=$('plot'),ctx=canvas.getContext('2d');
+let E=4,M=3,bias=7,points=[],unit=1,lo=-1,hi=1,W=1000,selected=0,drag=null;
+const pad=36,y=155;
+const binary=(v,n)=>v.toString(2).padStart(n,'0');
+const fmt=v=>Object.is(v,-0)?'−0':String(v);
+function transform(v){return $('scale').value==='linear'?v:Math.sign(v)*Math.log2(1+Math.abs(v)/unit)}
+function inverse(t){return $('scale').value==='linear'?t:Math.sign(t)*Math.expm1(Math.abs(t)*Math.LN2)*unit}
+function x(v){return pad+(transform(v)-lo)/(hi-lo)*(W-2*pad)}
+function lower(t){let a=0,b=points.length;while(a<b){let m=(a+b)>>1;if(transform(points[m].v)<t)a=m+1;else b=m}return a}
+function bits(p){return `${p.s} | ${binary(p.e,E)} | ${binary(p.f,M)}`}
+function category(p){return p.v===0?'Zero ze znakiem':p.sub?'Liczba subnormalna':'Liczba znormalizowana'}
+function select(i){selected=Math.max(0,Math.min(points.length-1,i));draw()}
+function range(a,b){lo=transform(a);hi=transform(b);$('tip').style.display='none';draw()}
+function reset(){const max=points.at(-1).v;range(-max*1.06,max*1.06)}
+const magnification = $('magnification');
+for (let power = -8; power <= 8; power++) {
+ const factor = power < 0 ? '1/' + 2**(-power) : String(2**power);
+ magnification.add(new Option(factor + '×', String(power)));
+}
+function fullSpan() {
+ return 2 * transform(points.at(-1).v * 1.06);
+}
+magnification.onchange = () => {
+ const targetSpan = fullSpan() / 2**Number(magnification.value);
+ zoom(targetSpan / (hi-lo));
+ syncMagnification();
+};
+function syncMagnification() {
+ const power = Math.log2(fullSpan() / (hi-lo));
+ const rounded = Math.round(power);
+ magnification.value = Math.abs(power-rounded) < 1e-8 ? String(rounded) : '';
+ if (magnification.selectedIndex < 0) magnification.value = '';
+}
+function draw(){
+ syncMagnification();
+ W=canvas.getBoundingClientRect().width;const dpr=window.devicePixelRatio||1;canvas.width=Math.round(W*dpr);canvas.height=320*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,320);
+ ctx.font='12px system-ui';ctx.textAlign='center';ctx.strokeStyle='#cbd5e1';ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(W-pad,y);ctx.stroke();
+ for(let i=0;i<=6;i++){const t=lo+(hi-lo)*i/6,xx=pad+(W-2*pad)*i/6;ctx.strokeStyle='#e5eaf2';ctx.beginPath();ctx.moveTo(xx,65);ctx.lineTo(xx,225);ctx.stroke();ctx.fillStyle='#526079';if(Number.isFinite(inverse(t)))ctx.fillText(Number(inverse(t).toPrecision(4)).toString(),xx,252)}
+ const start=lower(lo),end=lower(hi);
+ const field = Number($('highlight').value);
+ const colors = ['#2563eb', '#dc2626', '#15803d'];
+ for (let layer = 0; layer < colors.length; layer++) {
+  if (layer === 2 && field < 0) continue;
+  ctx.strokeStyle = colors[layer];
+  ctx.lineWidth = layer === 2 ? 2 : 1;
+  ctx.beginPath();
+  for (let i = start; i < Math.min(end+1, points.length); i++) {
+   const p = points[i];
+   if (p.v === 0 || (p.e === field ? 2 : Number(p.sub)) !== layer) continue;
+   const xx = x(p.v);
+   if (xx < pad || xx > W-pad) continue;
+   const height = layer === 2 ? 19 : 13;
+   ctx.moveTo(xx, y-height);
+   ctx.lineTo(xx, y+height);
+  }
+  ctx.stroke();
+ }
+ ctx.lineWidth = 1;
+ if(lo<=0&&hi>=0){ctx.fillStyle=field===0?colors[2]:colors[0];for(const s of [0,1]){ctx.beginPath();ctx.arc(x(0),s?y+30:y-30,4,0,Math.PI*2);ctx.fill();ctx.fillText(s?'−0':'+0',x(0),s?y+52:y-42)}}
+ const p=points[selected],xx=x(p.v);if(xx>=pad&&xx<=W-pad){ctx.strokeStyle='#172641';ctx.lineWidth=2;ctx.beginPath();ctx.arc(xx,p.v===0?(p.s?y+30:y-30):y,7,0,Math.PI*2);ctx.stroke();ctx.lineWidth=1}
+}
+function updateExponentOptions() {
+ const select = $('highlight');
+ const previous = select.value;
+ select.replaceChildren(new Option('Brak wyróżnienia', '-1'));
+ for (let field = 0; field < 2**E-1; field++) {
+  const meaning = field === 0 ? 'subnormalne i ±0' : 'wykładnik ' + (field-bias);
+  select.add(new Option(binary(field,E) + ' · ' + meaning, String(field)));
+ }
+ if (select.dataset.width === String(E)) select.value = previous;
+ select.dataset.width = String(E);
+}
+$('highlight').onchange = draw;
+function build(){const e=Number($('eb').value),m=Number($('mb').value);if(!Number.isInteger(e)||!Number.isInteger(m)||e<2||e>8||m<1||m>16||e+m>19){$('error').textContent='Wybierz E od 2 do 8, M od 1 do 16 oraz E + M ≤ 19.';return} $('error').textContent='';E=e;M=m;bias=2**(E-1)-1;unit=2**(1-bias);updateExponentOptions();points=generateFloats(E,M);selected=points.length/2;
+ reset();select(selected);
+}
+function zoom(f,ratio=.5){const anchor=lo+(hi-lo)*ratio,span=(hi-lo)*f;if(span<Math.max(Math.abs(anchor)*Number.EPSILON*32,unit*2**(-M)*.05))return;const a=anchor-span*ratio,b=a+span;if(Number.isFinite(a)&&Number.isFinite(b)&&a<b){lo=a;hi=b;draw()}}
+$('eb').onchange = build;
+$('mb').onchange = build;
+$('scale').onchange = reset;
+canvas.addEventListener('wheel',ev=>{ev.preventDefault();const r=canvas.getBoundingClientRect();zoom(ev.deltaY>0?1.35:1/1.35,Math.max(0,Math.min(1,(ev.clientX-r.left-pad)/(W-2*pad))))},{passive:false});
+canvas.onpointerdown=ev=>{drag={x:ev.clientX,lo,hi};canvas.setPointerCapture(ev.pointerId);$('tip').style.display='none'};
+canvas.onpointerup=()=>drag=null;canvas.onpointercancel=()=>drag=null;
+canvas.onpointermove=ev=>{if(drag){const shift=(ev.clientX-drag.x)/(W-2*pad)*(drag.hi-drag.lo);lo=drag.lo-shift;hi=drag.hi-shift;draw();return}const r=canvas.getBoundingClientRect(),px=ev.clientX-r.left,py=ev.clientY-r.top,t=lo+(px-pad)/(W-2*pad)*(hi-lo);let i=Math.min(points.length-1,lower(t));if(i>0&&Math.abs(x(points[i-1].v)-px)<Math.abs(x(points[i].v)-px))i--;if(points[i].v===0)i=points.length/2-(py>y?1:0);if(Math.abs(x(points[i].v)-px)>12){$('tip').style.display='none';return}select(i);const tip=$('tip');tip.innerHTML=`${fmt(points[i].v)} · ${category(points[i])}<br><code>${bits(points[i])}</code>`;tip.style.display='block';tip.style.left=Math.max(4,Math.min(ev.clientX+14,window.innerWidth-tip.offsetWidth-8))+'px';tip.style.top=Math.max(4,Math.min(ev.clientY+18,window.innerHeight-tip.offsetHeight-8))+'px'};
+canvas.onpointerleave=()=>{$('tip').style.display='none'};
+new ResizeObserver(draw).observe(canvas);build();
+</script></html>
